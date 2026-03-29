@@ -1,0 +1,556 @@
+{
+  "name": "Paperless Export to SharePoint",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -4352,
+        896
+      ],
+      "id": "fd5f9e84-3a2c-46e9-9664-dae022da93db",
+      "name": "Manueller Start"
+    },
+    {
+      "parameters": {
+        "url": "https://YOUR_PAPERLESS_URL/api/documents/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "tags__id__in",
+              "value": "YOUR_FERTIG_TAG_ID"
+            },
+            {
+              "name": "page_size",
+              "value": "1"
+            },
+            {
+              "name": "ordering",
+              "value": "created"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "c0ad8f8a-cca4-4b21-bcfd-b5143d2422fd",
+      "name": "Get 1 Document with Fertig Tag",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -4128,
+        800
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_PAPERLESS_CREDENTIAL_ID",
+          "name": "Paperless API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-001",
+              "leftValue": "={{ $json.count }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "444db29c-36b8-4f10-8cfb-28351694d553",
+      "name": "Document Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -3904,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "doc-id-assignment",
+              "name": "doc_id",
+              "value": "={{ $json.results[0].id }}",
+              "type": "number"
+            },
+            {
+              "id": "doc-title-assignment",
+              "name": "doc_title",
+              "value": "={{ $json.results[0].title }}",
+              "type": "string"
+            },
+            {
+              "id": "doc-tags-assignment",
+              "name": "doc_tags",
+              "value": "={{ $json.results[0].tags }}",
+              "type": "array"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1730c7f0-4bc5-43b5-b02e-1b70a447427b",
+      "name": "Extract Document Info",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -3680,
+        704
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://YOUR_PAPERLESS_URL/api/tags/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "3d281b72-99c6-461f-a2d5-c4c7c29d36f8",
+      "name": "Get All Tags (for mapping)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -3456,
+        704
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_PAPERLESS_CREDENTIAL_ID",
+          "name": "Paperless API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================\n// SharePoint Pfad aus Paperless-Tags aufbauen\n// Gleiche Logik wie V11 Mail-Workflow\n// ============================================\nconst docInfo = $('Extract Document Info').first().json;\nconst allTagsResponse = $('Get All Tags (for mapping)').first().json;\n\n// Tag-ID zu Name Mapping\nconst tagMap = {};\nallTagsResponse.results.forEach(tag => {\n  tagMap[tag.id] = tag.name;\n});\n\n// Tag-Namen ermitteln, 'Fertig' rausfiltern\nconst tagNames = docInfo.doc_tags\n  .map(tagId => tagMap[tagId])\n  .filter(name => name && name !== 'Fertig');\n\nif (tagNames.length === 0) {\n  tagNames.push('Sonstige');\n}\n\n// Ordnerpfad (relativ unter DMS/Archiv/Paperless/)\nconst folderPath = tagNames.join('/');\n\n// Dateiname säubern (keine Sonderzeichen die SharePoint nicht mag)\nconst safeTitle = docInfo.doc_title\n  .replace(/[<>:\"\\/\\\\|?*#%]/g, '_')\n  .trim();\nconst fileName = safeTitle + '.pdf';\n\n// SharePoint REST API Pfade (identisches Muster wie V11)\nconst siteBase = 'https://YOUR_TENANT.sharepoint.com/sites/YOUR_SITE';\nconst serverRelativeFolder = `/sites/YOUR_SITE/YOUR_SHAREPOINT_BASE_PATH/Paperless/${folderPath}`;\n\n// URL-encoded Ordnerpfad für API-Aufrufe\nconst encodedFolder = serverRelativeFolder.replace(/ /g, '%20');\n\nconst folderCreateUrl = `${siteBase}/_api/web/folders/add('${encodedFolder}')`;\nconst uploadUrl = `${siteBase}/_api/web/GetFolderByServerRelativeUrl('${encodedFolder}')/Files/add(url='${encodeURIComponent(fileName)}',overwrite=true)`;\n\nreturn {\n  json: {\n    doc_id: docInfo.doc_id,\n    doc_title: docInfo.doc_title,\n    tag_names: tagNames,\n    folder_path: folderPath,\n    file_name: fileName,\n    folder_create_url: folderCreateUrl,\n    upload_url: uploadUrl,\n    server_relative_folder: serverRelativeFolder\n  }\n};"
+      },
+      "id": "cf1733c2-7358-41ff-a0c4-ed30c0d5c973",
+      "name": "Build SharePoint Path",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3232,
+        704
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://YOUR_PAPERLESS_URL/api/documents/{{ $('Extract Document Info').first().json.doc_id }}/download/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "id": "b6bc172a-a496-457c-9681-ab7fcac70e7d",
+      "name": "Download PDF",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -3008,
+        704
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_PAPERLESS_CREDENTIAL_ID",
+          "name": "Paperless API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Build SharePoint Path').first().json.folder_create_url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftSharePointOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json;odata=verbose"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a75f5457-b5e0-4541-893c-e6f82e39b0a5",
+      "name": "SharePoint Ordner erstellen wenn nicht vorhanden",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -2784,
+        704
+      ],
+      "credentials": {
+        "microsoftSharePointOAuth2Api": {
+          "id": "YOUR_SHAREPOINT_CREDENTIAL_ID",
+          "name": "Microsoft SharePoint account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Binary vom Download-Node wiederherstellen.\n// Der Ordner-Node überschreibt den Output und verliert dabei die Binary.\nconst pdf = $('Download PDF').first();\nreturn {\n  json: $('Build SharePoint Path').first().json,\n  binary: pdf.binary\n};"
+      },
+      "id": "c95c7d56-7df4-4b3a-b119-e4c62a848558",
+      "name": "PDF Binary wiederherstellen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2560,
+        704
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.upload_url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftSharePointOAuth2Api",
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {}
+      },
+      "id": "1c945d7e-c6da-44d1-8d18-52c9d782e8f9",
+      "name": "SharePoint Upload",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -2336,
+        704
+      ],
+      "credentials": {
+        "microsoftSharePointOAuth2Api": {
+          "id": "YOUR_SHAREPOINT_CREDENTIAL_ID",
+          "name": "Microsoft SharePoint account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "=https://YOUR_PAPERLESS_URL/api/documents/{{ $('Extract Document Info').first().json.doc_id }}/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "0a21043c-277b-4a7d-8e62-35bfa7fb0686",
+      "name": "Delete from Paperless",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2112,
+        608
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_PAPERLESS_CREDENTIAL_ID",
+          "name": "Paperless API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "error-msg",
+              "name": "fehler",
+              "value": "=⚠️ Upload fehlgeschlagen für Dokument {{ $('Extract Document Info').first().json.doc_id }} - '{{ $('Extract Document Info').first().json.doc_title }}'. Dokument wurde NICHT aus Paperless gelöscht.",
+              "type": "string"
+            },
+            {
+              "id": "doc-id-keep",
+              "name": "doc_id",
+              "value": "={{ $('Extract Document Info').first().json.doc_id }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "4acadf89-549c-40c4-9914-050b67533243",
+      "name": "Upload fehlgeschlagen - in Paperless behalten",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -2112,
+        800
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "a93f6e85-456a-49f4-8b72-fb5e250a37bb",
+      "name": "Kein Dokument - Stop",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        -3680,
+        896
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const info = $('Build SharePoint Path').first().json;\nconst input = $input.first().json;\n\nconst erfolg = !input.fehler;\nconst icon = erfolg ? '✅' : '❌';\nconst aktion = erfolg\n  ? 'Aus Paperless gelöscht und nach SharePoint verschoben'\n  : 'NICHT verschoben – verbleibt in Paperless';\n\nconst zeilen = [\n  '═══════════════════════════════════════════════',\n  `${icon}  PAPERLESS EXPORT ABGESCHLOSSEN`,\n  '═══════════════════════════════════════════════',\n  '',\n  `📄 Dokument :  ${info.doc_title}`,\n  `🔖 Tags     :  ${info.tag_names.join(', ')}`,\n  '',\n  `📁 Zielordner: DMS/Archiv/Paperless/${info.folder_path}`,\n  `📎 Dateiname : ${info.file_name}`,\n  '',\n  `🔄 Aktion   :  ${aktion}`,\n  ...(erfolg ? [] : [`⚠️  Fehler   :  ${input.fehler}`]),\n  '',\n  '═══════════════════════════════════════════════',\n];\n\nconst zusammenfassung = zeilen.join('\\n');\nconsole.log(zusammenfassung);\n\nreturn [{\n  json: {\n    zusammenfassung,\n    doc_id: info.doc_id,\n    doc_title: info.doc_title,\n    ziel: `DMS/Archiv/Paperless/${info.folder_path}/${info.file_name}`,\n    erfolg\n  }\n}];"
+      },
+      "id": "045f2619-78fb-4641-b9fa-eb14334474af",
+      "name": "📋 Zusammenfassung",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1888,
+        704
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "={{ $json.zusammenfassung }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -1664,
+        704
+      ],
+      "id": "5512ff3e-256a-4805-a65d-6411a4bc2485",
+      "name": "Telegram Benachrichtigung",
+      "webhookId": "e240d0a8-1ba6-4f27-9e2c-0703a0101ca9",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "seconds",
+              "secondsInterval": 3
+            }
+          ]
+        }
+      },
+      "id": "7e06f62c-a51a-4567-9e06-718656e7cedc",
+      "name": "Alle 3 Sekunden",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -4352,
+        704
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manueller Start": {
+      "main": [
+        [
+          {
+            "node": "Get 1 Document with Fertig Tag",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get 1 Document with Fertig Tag": {
+      "main": [
+        [
+          {
+            "node": "Document Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Document Found?": {
+      "main": [
+        [
+          {
+            "node": "Extract Document Info",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Kein Dokument - Stop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Document Info": {
+      "main": [
+        [
+          {
+            "node": "Get All Tags (for mapping)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get All Tags (for mapping)": {
+      "main": [
+        [
+          {
+            "node": "Build SharePoint Path",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build SharePoint Path": {
+      "main": [
+        [
+          {
+            "node": "Download PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download PDF": {
+      "main": [
+        [
+          {
+            "node": "SharePoint Ordner erstellen wenn nicht vorhanden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SharePoint Ordner erstellen wenn nicht vorhanden": {
+      "main": [
+        [
+          {
+            "node": "PDF Binary wiederherstellen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PDF Binary wiederherstellen": {
+      "main": [
+        [
+          {
+            "node": "SharePoint Upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SharePoint Upload": {
+      "main": [
+        [
+          {
+            "node": "Delete from Paperless",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Upload fehlgeschlagen - in Paperless behalten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete from Paperless": {
+      "main": [
+        [
+          {
+            "node": "📋 Zusammenfassung",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload fehlgeschlagen - in Paperless behalten": {
+      "main": [
+        [
+          {
+            "node": "📋 Zusammenfassung",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📋 Zusammenfassung": {
+      "main": [
+        [
+          {
+            "node": "Telegram Benachrichtigung",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alle 3 Sekunden": {
+      "main": [
+        [
+          {
+            "node": "Get 1 Document with Fertig Tag",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
